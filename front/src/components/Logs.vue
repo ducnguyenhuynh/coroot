@@ -23,6 +23,33 @@
                     />
                     <LogSearchButtons :interval="refreshInterval" @search="get" @refresh="setRefreshInterval" />
                 </div>
+                <div v-if="showSources" class="d-flex align-center gap-2 services">
+                    <div class="text-no-wrap">Services:</div>
+                    <v-text-field
+                        v-if="services.items.length > 10"
+                        v-model="services.search"
+                        dense
+                        clearable
+                        hide-details
+                        prepend-inner-icon="mdi-magnify"
+                        style="max-width: 200px"
+                    />
+                    <v-progress-circular v-if="services.loading" indeterminate size="16" width="2" />
+                    <div v-else-if="!services.items.length" class="caption grey--text">no services found</div>
+                    <div v-else class="d-flex flex-wrap gap-1 services-list">
+                        <v-chip
+                            v-for="name in filteredServices"
+                            :key="name"
+                            small
+                            label
+                            :color="isServiceActive(name) ? 'primary' : undefined"
+                            :dark="isServiceActive(name)"
+                            @click="toggleService(name)"
+                        >
+                            {{ name }}
+                        </v-chip>
+                    </div>
+                </div>
                 <div v-if="showSources" class="d-flex gap-2 sources">
                     <v-checkbox v-model="query.agent" label="Container logs" :disabled="disabled" dense hide-details />
                     <v-checkbox v-model="query.otel" label="OpenTelemetry" :disabled="disabled" dense hide-details />
@@ -177,6 +204,11 @@ export default {
                 field: '',
                 value: '',
             },
+            services: {
+                loading: false,
+                items: [],
+                search: '',
+            },
         };
     },
 
@@ -265,6 +297,10 @@ export default {
         disabled() {
             return this.loading || this.query.view !== 'messages';
         },
+        filteredServices() {
+            const search = this.services.items.length > 10 ? (this.services.search || '').toLowerCase() : '';
+            return this.services.items.filter((name) => name.toLowerCase().includes(search));
+        },
     },
 
     methods: {
@@ -341,6 +377,41 @@ export default {
                 }
                 this.view = data.logs || {};
             });
+            if (this.showSources) {
+                this.getServices();
+            }
+        },
+        getServices() {
+            this.services.loading = true;
+            const filters = this.queryWithDefaults.filters.filter((f) => f.name !== 'service.name');
+            this.$api.getOverview('logs', JSON.stringify({ ...this.queryWithDefaults, filters, suggest: 'service.name' }), (data, error) => {
+                this.services.loading = false;
+                if (error || data.status === 'warning') {
+                    this.services.items = [];
+                    return;
+                }
+                this.services.items = (data.logs?.suggest || []).filter(Boolean);
+            });
+        },
+        isServiceActive(name) {
+            return this.query.filters.some((f) => f.name === 'service.name' && f.op === '=' && f.value === name);
+        },
+        toggleService(name) {
+            if (this.isServiceActive(name)) {
+                this.query.filters.splice(
+                    this.query.filters.findIndex((f) => f.name === 'service.name' && f.op === '=' && f.value === name),
+                    1,
+                );
+            } else {
+                for (let i = this.query.filters.length - 1; i >= 0; i--) {
+                    if (this.query.filters[i].name === 'service.name' && this.query.filters[i].op === '=') {
+                        this.query.filters.splice(i, 1);
+                    }
+                }
+                this.query.filters.push({ name: 'service.name', op: '=', value: name });
+            }
+            this.query.view = 'messages';
+            this.entry = null;
         },
         startRefresh(interval) {
             if (this.$route.query.to) {
@@ -454,6 +525,10 @@ export default {
 }
 .sources:deep(.v-input--selection-controls__input) {
     margin-right: 0 !important;
+}
+.services-list {
+    max-height: 96px;
+    overflow-y: auto;
 }
 .mono {
     font-family: monospace, monospace;
