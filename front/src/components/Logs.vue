@@ -23,6 +23,24 @@
                     />
                     <LogSearchButtons :interval="refreshInterval" @search="get" @refresh="setRefreshInterval" />
                 </div>
+                <div v-if="showSources" class="mt-3">
+                    <ApplicationFilter :applications="appsWithLogs" @filter="appFilter = $event" class="mb-2" />
+                    <div v-if="appPills.length" class="app-pills">
+                        <div
+                            v-for="a in appPills"
+                            :key="a.id"
+                            class="app-pill primary--text"
+                            :class="{ active: isServiceActive(a.service) }"
+                            :title="a.service"
+                            @click="toggleService(a.service)"
+                        >
+                            <span class="status" :class="a.color" />
+                            <span class="name">{{ a.name }}</span>
+                            <AppIcon :icon="a.icon" />
+                        </div>
+                    </div>
+                    <div v-else-if="!services.loading" class="caption grey--text">no applications with logs</div>
+                </div>
                 <div v-if="showSources" class="d-flex gap-2 sources">
                     <v-checkbox v-model="query.agent" label="Container logs" :disabled="disabled" dense hide-details />
                     <v-checkbox v-model="query.otel" label="OpenTelemetry" :disabled="disabled" dense hide-details />
@@ -122,9 +140,19 @@ import Chart from '@/components/Chart.vue';
 import LogEntry from '@/components/LogEntry.vue';
 import InlineSelect from '@/components/InlineSelect.vue';
 import LogSearchButtons from '@/components/LogSearchButtons.vue';
+import ApplicationFilter from '@/components/ApplicationFilter.vue';
+import AppIcon from '@/components/AppIcon.vue';
+
+const statusColors = {
+    critical: 'red lighten-1',
+    warning: 'orange lighten-1',
+    info: 'blue lighten-1',
+    unknown: 'purple lighten-1',
+    ok: 'green lighten-1',
+};
 
 export default {
-    components: { LogSearchButtons, InlineSelect, LogEntry, Chart, QueryBuilder },
+    components: { LogSearchButtons, InlineSelect, LogEntry, Chart, QueryBuilder, ApplicationFilter, AppIcon },
 
     props: {
         showSources: {
@@ -177,6 +205,12 @@ export default {
                 field: '',
                 value: '',
             },
+            services: {
+                loading: false,
+                items: [],
+            },
+            apps: [],
+            appFilter: new Set(),
         };
     },
 
@@ -265,6 +299,25 @@ export default {
         disabled() {
             return this.loading || this.query.view !== 'messages';
         },
+        appsWithLogs() {
+            const apps = [];
+            this.apps.forEach((a) => {
+                const name = this.$utils.appId(a.id).name;
+                const service = this.services.items.find((s) => s === name || s.endsWith('/' + name));
+                if (!service) return;
+                apps.push({
+                    ...a,
+                    name,
+                    service,
+                    color: statusColors[a.status] || 'grey lighten-1',
+                    icon: a.type ? a.type.icon : '',
+                });
+            });
+            return apps.sort((a, b) => a.name.localeCompare(b.name));
+        },
+        appPills() {
+            return this.appsWithLogs.filter((a) => this.appFilter.has(a.id));
+        },
     },
 
     methods: {
@@ -341,6 +394,48 @@ export default {
                 }
                 this.view = data.logs || {};
             });
+            if (this.showSources) {
+                this.getServices();
+                this.getApps();
+            }
+        },
+        getApps() {
+            this.$api.getOverview('applications', '', (data, error) => {
+                if (error) return;
+                this.apps = data.applications || [];
+            });
+        },
+        getServices() {
+            this.services.loading = true;
+            const filters = this.queryWithDefaults.filters.filter((f) => f.name !== 'service.name');
+            this.$api.getOverview('logs', JSON.stringify({ ...this.queryWithDefaults, filters, suggest: 'service.name' }), (data, error) => {
+                this.services.loading = false;
+                if (error || data.status === 'warning') {
+                    this.services.items = [];
+                    return;
+                }
+                this.services.items = (data.logs?.suggest || []).filter(Boolean);
+            });
+        },
+        isServiceActive(name) {
+            return this.query.filters.some((f) => f.name === 'service.name' && f.op === '=' && f.value === name);
+        },
+        toggleService(name) {
+            if (this.isServiceActive(name)) {
+                this.query.filters.splice(
+                    this.query.filters.findIndex((f) => f.name === 'service.name' && f.op === '=' && f.value === name),
+                    1,
+                );
+            } else {
+                for (let i = this.query.filters.length - 1; i >= 0; i--) {
+                    if (this.query.filters[i].name === 'service.name' && this.query.filters[i].op === '=') {
+                        this.query.filters.splice(i, 1);
+                    }
+                }
+                this.query.filters.push({ name: 'service.name', op: '=', value: name });
+            }
+            this.query.view = 'messages';
+            this.entry = null;
         },
         startRefresh(interval) {
             if (this.$route.query.to) {
@@ -454,6 +549,44 @@ export default {
 }
 .sources:deep(.v-input--selection-controls__input) {
     margin-right: 0 !important;
+}
+.app-pills {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+    gap: 6px;
+    max-height: 160px;
+    overflow-y: auto;
+}
+.app-pill {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 8px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+}
+.app-pill:hover {
+    border-color: currentColor;
+}
+.app-pill.active {
+    border-color: currentColor;
+    background-color: rgba(25, 118, 210, 0.12);
+    font-weight: 500;
+}
+.app-pill .status {
+    flex: none;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+}
+.app-pill .name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 .mono {
     font-family: monospace, monospace;
