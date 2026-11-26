@@ -23,32 +23,23 @@
                     />
                     <LogSearchButtons :interval="refreshInterval" @search="get" @refresh="setRefreshInterval" />
                 </div>
-                <div v-if="showSources" class="d-flex align-center gap-2 services">
-                    <div class="text-no-wrap">Services:</div>
-                    <v-text-field
-                        v-if="services.items.length > 10"
-                        v-model="services.search"
-                        dense
-                        clearable
-                        hide-details
-                        prepend-inner-icon="mdi-magnify"
-                        style="max-width: 200px"
-                    />
-                    <v-progress-circular v-if="services.loading" indeterminate size="16" width="2" />
-                    <div v-else-if="!services.items.length" class="caption grey--text">no services found</div>
-                    <div v-else class="d-flex flex-wrap gap-1 services-list">
-                        <v-chip
-                            v-for="name in filteredServices"
-                            :key="name"
-                            small
-                            label
-                            :color="isServiceActive(name) ? 'primary' : undefined"
-                            :dark="isServiceActive(name)"
-                            @click="toggleService(name)"
+                <div v-if="showSources" class="mt-3">
+                    <ApplicationFilter :applications="appsWithLogs" @filter="appFilter = $event" class="mb-2" />
+                    <div v-if="appPills.length" class="app-pills">
+                        <div
+                            v-for="a in appPills"
+                            :key="a.id"
+                            class="app-pill primary--text"
+                            :class="{ active: isServiceActive(a.service) }"
+                            :title="a.service"
+                            @click="toggleService(a.service)"
                         >
-                            {{ name }}
-                        </v-chip>
+                            <span class="status" :class="a.color" />
+                            <span class="name">{{ a.name }}</span>
+                            <AppIcon :icon="a.icon" />
+                        </div>
                     </div>
+                    <div v-else-if="!services.loading" class="caption grey--text">no applications with logs</div>
                 </div>
                 <div v-if="showSources" class="d-flex gap-2 sources">
                     <v-checkbox v-model="query.agent" label="Container logs" :disabled="disabled" dense hide-details />
@@ -149,9 +140,19 @@ import Chart from '@/components/Chart.vue';
 import LogEntry from '@/components/LogEntry.vue';
 import InlineSelect from '@/components/InlineSelect.vue';
 import LogSearchButtons from '@/components/LogSearchButtons.vue';
+import ApplicationFilter from '@/components/ApplicationFilter.vue';
+import AppIcon from '@/components/AppIcon.vue';
+
+const statusColors = {
+    critical: 'red lighten-1',
+    warning: 'orange lighten-1',
+    info: 'blue lighten-1',
+    unknown: 'purple lighten-1',
+    ok: 'green lighten-1',
+};
 
 export default {
-    components: { LogSearchButtons, InlineSelect, LogEntry, Chart, QueryBuilder },
+    components: { LogSearchButtons, InlineSelect, LogEntry, Chart, QueryBuilder, ApplicationFilter, AppIcon },
 
     props: {
         showSources: {
@@ -207,8 +208,9 @@ export default {
             services: {
                 loading: false,
                 items: [],
-                search: '',
             },
+            apps: [],
+            appFilter: new Set(),
         };
     },
 
@@ -297,9 +299,24 @@ export default {
         disabled() {
             return this.loading || this.query.view !== 'messages';
         },
-        filteredServices() {
-            const search = this.services.items.length > 10 ? (this.services.search || '').toLowerCase() : '';
-            return this.services.items.filter((name) => name.toLowerCase().includes(search));
+        appsWithLogs() {
+            const apps = [];
+            this.apps.forEach((a) => {
+                const name = this.$utils.appId(a.id).name;
+                const service = this.services.items.find((s) => s === name || s.endsWith('/' + name));
+                if (!service) return;
+                apps.push({
+                    ...a,
+                    name,
+                    service,
+                    color: statusColors[a.status] || 'grey lighten-1',
+                    icon: a.type ? a.type.icon : '',
+                });
+            });
+            return apps.sort((a, b) => a.name.localeCompare(b.name));
+        },
+        appPills() {
+            return this.appsWithLogs.filter((a) => this.appFilter.has(a.id));
         },
     },
 
@@ -379,7 +396,14 @@ export default {
             });
             if (this.showSources) {
                 this.getServices();
+                this.getApps();
             }
+        },
+        getApps() {
+            this.$api.getOverview('applications', '', (data, error) => {
+                if (error) return;
+                this.apps = data.applications || [];
+            });
         },
         getServices() {
             this.services.loading = true;
@@ -526,9 +550,43 @@ export default {
 .sources:deep(.v-input--selection-controls__input) {
     margin-right: 0 !important;
 }
-.services-list {
-    max-height: 96px;
+.app-pills {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+    gap: 6px;
+    max-height: 160px;
     overflow-y: auto;
+}
+.app-pill {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 8px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+}
+.app-pill:hover {
+    border-color: currentColor;
+}
+.app-pill.active {
+    border-color: currentColor;
+    background-color: rgba(25, 118, 210, 0.12);
+    font-weight: 500;
+}
+.app-pill .status {
+    flex: none;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+}
+.app-pill .name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 .mono {
     font-family: monospace, monospace;
